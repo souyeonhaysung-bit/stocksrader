@@ -128,7 +128,11 @@ def build_filters(momentum: pd.DataFrame, movers: pd.DataFrame) -> Tuple[str, st
 
     horizons = sorted(momentum["horizon_label"].unique(), key=lambda x: momentum[momentum["horizon_label"] == x]["horizon_days"].iloc[0])
     continents = ["All"] + sorted(momentum["continent"].dropna().unique())
-    levels = sorted(momentum["entity_level"].dropna().unique())
+    available_levels = momentum["entity_level"].dropna().unique().tolist()
+    preferred_order = ["continent", "country", "sector"]
+    levels = [lvl for lvl in preferred_order if lvl in available_levels]
+    if not levels and available_levels:
+        levels = sorted(available_levels)
 
     st.sidebar.header("Filters")
     selected_horizon = st.sidebar.selectbox("Horizon", horizons, index=max(0, horizons.index("1M")) if "1M" in horizons else 0)

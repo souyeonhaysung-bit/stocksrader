@@ -274,42 +274,10 @@ def build_top_movers(
     return pd.concat(movers_frames, ignore_index=True)
 
 
-def build_momentum_scores(
-    top_movers: pd.DataFrame,
-) -> pd.DataFrame:
-    """Aggregate momentum scores at the continent level."""
+def build_momentum_scores(top_movers: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate momentum scores at continent, country, and sector levels."""
 
-    if top_movers.empty:
-        return pd.DataFrame(
-            columns=[
-                "entity_level",
-                "entity_name",
-                "continent",
-                "horizon_label",
-                "horizon_days",
-                "avg_momentum",
-                "median_momentum",
-                "num_constituents",
-            ]
-        )
-
-    agg = (
-        top_movers.groupby(["continent", "horizon_label"], dropna=False)
-        .agg(
-            avg_momentum=("momentum_z", "mean"),
-            median_momentum=("momentum_z", "median"),
-            num_constituents=("symbol", "nunique"),
-        )
-        .reset_index()
-    )
-
-    horizon_lookup = {label: days for days, label in HORIZON_MAP.items()}
-    agg["horizon_days"] = agg["horizon_label"].map(horizon_lookup)
-    agg["entity_level"] = "continent"
-    agg.rename(columns={"continent": "entity_name"}, inplace=True)
-    agg["continent"] = agg["entity_name"]
-
-    columns = [
+    base_columns = [
         "entity_level",
         "entity_name",
         "continent",
@@ -320,8 +288,66 @@ def build_momentum_scores(
         "num_constituents",
     ]
 
-    agg = agg[columns]
-    return agg
+    if top_movers.empty:
+        return pd.DataFrame(columns=base_columns)
+
+    top_movers = top_movers.copy()
+    top_movers["continent"] = top_movers["continent"].fillna("Unmapped")
+    top_movers["country"] = top_movers["country"].fillna("")
+    top_movers["sector"] = top_movers["sector"].fillna("Unspecified")
+
+    horizon_lookup = {label: days for days, label in HORIZON_MAP.items()}
+
+    level_configs = {
+        "continent": {
+            "group_cols": ["continent"],
+            "entity_col": "continent",
+        },
+        "country": {
+            "group_cols": ["continent", "country"],
+            "entity_col": "country",
+        },
+        "sector": {
+            "group_cols": ["continent", "sector"],
+            "entity_col": "sector",
+        },
+    }
+
+    frames: List[pd.DataFrame] = []
+
+    for level, config in level_configs.items():
+        entity_col = config["entity_col"]
+
+        level_df = top_movers[top_movers[entity_col] != ""].copy()
+        if level_df.empty:
+            continue
+
+        grouped = (
+            level_df.groupby(config["group_cols"] + ["horizon_label"], dropna=False)
+            .agg(
+                avg_momentum=("momentum_z", "mean"),
+                median_momentum=("momentum_z", "median"),
+                num_constituents=("symbol", "nunique"),
+            )
+            .reset_index()
+        )
+
+        grouped["horizon_days"] = grouped["horizon_label"].map(horizon_lookup)
+        grouped["entity_level"] = level
+        grouped["entity_name"] = grouped[entity_col]
+
+        if level != "continent":
+            grouped = grouped.drop(columns=[entity_col])
+
+        grouped = grouped[base_columns]
+        frames.append(grouped)
+
+    if not frames:
+        return pd.DataFrame(columns=base_columns)
+
+    combined = pd.concat(frames, ignore_index=True)
+    combined.sort_values(["entity_level", "horizon_days", "entity_name"], inplace=True)
+    return combined.reset_index(drop=True)
 
 
 def persist_outputs(momentum_scores: pd.DataFrame, top_movers: pd.DataFrame) -> None:
