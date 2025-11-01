@@ -42,7 +42,7 @@ MOMENTUM_PATH = DATA_DIR / "momentum_scores.parquet"
 TOP_MOVERS_PATH = DATA_DIR / "top_movers.parquet"
 
 
-@st.cache_data(show_spinner=False, ttl=300)
+@st.cache_data(show_spinner=False, ttl=86400)
 def load_parquet(path: Path) -> pd.DataFrame | None:
     """Load a parquet file if present; return *None* when missing."""
 
