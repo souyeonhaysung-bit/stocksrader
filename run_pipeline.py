@@ -13,6 +13,7 @@ These artifacts power the interactive dashboard in `streamlit_app.py`.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List
@@ -35,6 +36,7 @@ HORIZON_MAP: Dict[int, str] = {
 
 DATA_DIR = Path("data/processed")
 HIERARCHY_PATH = Path("config/hierarchy_map.csv")
+USE_YFINANCE = os.getenv("USE_YFINANCE", "false").lower() in {"1", "true", "yes"}
 
 
 @dataclass
@@ -89,6 +91,57 @@ def load_hierarchy(path: Path) -> pd.DataFrame:
     hierarchy["sector"] = hierarchy["sector"].fillna("Multi")
 
     return hierarchy
+
+
+def fetch_yfinance_history(symbols: Iterable[str]) -> pd.DataFrame:
+    """Retrieve two years of daily adjusted close data via yfinance."""
+
+    try:
+        import yfinance as yf
+    except ImportError as exc:  # pragma: no cover - dependency guarantee
+        raise RuntimeError("yfinance is required when USE_YFINANCE is True") from exc
+
+    records: List[Dict[str, float]] = []
+    for symbol in symbols:
+        try:
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(period="2y", interval="1d", auto_adjust=False)
+        except Exception as exc:  # pragma: no cover - network variability
+            print(f"[WARN] Failed to download {symbol}: {exc}")
+            continue
+
+        if df.empty or "Adj Close" not in df.columns:
+            print(f"[WARN] No adjusted close data for {symbol}; skipping.")
+            continue
+
+        df = df.reset_index()
+        date_col = "Date" if "Date" in df.columns else df.columns[0]
+        df.rename(columns={date_col: "timestamp"}, inplace=True)
+        df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.tz_localize(None)
+        df["adj_close"] = df["Adj Close"].astype(float)
+        df = df[["timestamp", "adj_close"]]
+        df["symbol"] = symbol
+        records.extend(df.to_dict(orient="records"))
+
+    if not records:
+        print("[WARN] yfinance download returned no data; falling back to simulator.")
+        return pd.DataFrame()
+
+    prices_df = pd.DataFrame(records)
+    if "adj_close" not in prices_df.columns:
+        print("[WARN] Adjusted close column missing from yfinance output; falling back to simulator.")
+        return pd.DataFrame()
+
+    prices_df.dropna(subset=["adj_close"], inplace=True)
+
+    if prices_df.empty:
+        print("[WARN] yfinance provided only NaN adjusted closes; falling back to simulator.")
+        return pd.DataFrame()
+
+    prices_df["timestamp"] = pd.to_datetime(prices_df["timestamp"])
+    prices_df.sort_values(["symbol", "timestamp"], inplace=True)
+    prices_df.reset_index(drop=True, inplace=True)
+    return prices_df
 
 
 def generate_price_history(symbols: Iterable[str], config: PriceHistoryConfig) -> pd.DataFrame:
@@ -289,7 +342,13 @@ def run_pipeline() -> None:
     hierarchy = load_hierarchy(HIERARCHY_PATH)
     symbols = hierarchy["symbol"].dropna().unique().tolist()
 
-    prices = generate_price_history(symbols, PriceHistoryConfig())
+    prices = pd.DataFrame()
+    if USE_YFINANCE:
+        prices = fetch_yfinance_history(symbols)
+
+    if prices.empty:
+        prices = generate_price_history(symbols, PriceHistoryConfig())
+
     with_returns = compute_log_returns(prices, HORIZON_MAP.keys())
     latest = prepare_latest_snapshot(with_returns)
 
