@@ -42,7 +42,7 @@ MOMENTUM_PATH = DATA_DIR / "momentum_scores.parquet"
 TOP_MOVERS_PATH = DATA_DIR / "top_movers.parquet"
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=300)
 def load_parquet(path: Path) -> pd.DataFrame | None:
     """Load a parquet file if present; return *None* when missing."""
 
@@ -134,6 +134,10 @@ def build_filters(momentum: pd.DataFrame, movers: pd.DataFrame) -> Tuple[str, st
     selected_horizon = st.sidebar.selectbox("Horizon", horizons, index=max(0, horizons.index("1M")) if "1M" in horizons else 0)
     selected_continent = st.sidebar.selectbox("Continent", continents, index=0)
     selected_level = st.sidebar.selectbox("Entity Level", levels, index=0)
+
+    if st.sidebar.button("Refresh Data", type="primary"):
+        load_parquet.clear()
+        st.experimental_rerun()
 
     st.sidebar.markdown("---")
     st.sidebar.caption(
